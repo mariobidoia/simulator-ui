@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard IoT - MQTT</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Biblioteca oficial MQTT.js (A mesma que os alunos usarão no Node.js) -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        @keyframes pulse-red {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+            50% { box-shadow: 0 0 15px 5px rgba(239, 68, 68, 0.4); }
+        }
+        .alert-active { border-color: #ef4444 !important; animation: pulse-red 2s infinite; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #0f172a; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    </style>
+</head>
+<body class="bg-gray-900 text-slate-200 p-6 font-sans min-h-screen custom-scrollbar">
+
+    <div class="max-w-7xl mx-auto">
+        <!-- Cabeçalho Global -->
+        <header class="flex justify-between items-center bg-slate-800 p-5 rounded-lg border border-slate-700 mb-6 shadow-lg">
+            <div>
+                <h1 class="text-2xl font-bold text-blue-400">Central de Monitoramento (MQTT IoT)</h1>
+                <p class="text-sm text-slate-400 mt-1" id="headerSubtitle">Visão Geral da Frota</p>
+            </div>
+            <div class="text-right">
+                <div class="text-sm text-slate-400">Broker: hivemq.com (WS/8000)</div>
+                <div id="connectionStatus" class="text-amber-400 font-bold flex items-center gap-2 justify-end">
+                    Conectando ao Broker...
+                </div>
+            </div>
+        </header>
+
+        <!-- TELA 1: VISÃO GERAL (FROTA) -->
+        <div id="overviewView" class="block">
+            <div class="flex justify-between items-end mb-4">
+                <h2 class="text-lg font-bold text-slate-300">Equipamentos Reportando</h2>
+                <span class="text-sm text-slate-400" id="totalDevicesCounter">Total: 0</span>
+            </div>
+            
+            <div id="devicesGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                <!-- Preenchido via MQTT -->
+                <p id="waitingMessage" class="text-slate-500 col-span-full text-center py-10">Aguardando telemetria das placas Inverter...</p>
+            </div>
+        </div>
+
+        <!-- TELA 2: VISÃO DE DETALHES (UMA PLACA) -->
+        <div id="detailView" class="hidden">
+            <button onclick="backToOverview()" class="mb-6 flex items-center gap-2 text-cyan-400 hover:text-cyan-300 transition-colors font-bold bg-slate-800 px-4 py-2 rounded-lg border border-slate-700 hover:border-cyan-500">
+                <span>⬅</span> Voltar para Frota
+            </button>
+
+            <!-- Painel de Alerta Crítico -->
+            <div id="alertPanel" class="hidden bg-red-900/50 border border-red-500 p-4 rounded-lg mb-6 alert-active">
+                <div class="flex items-center gap-3">
+                    <span class="text-3xl">⚠️</span>
+                    <div>
+                        <h2 class="text-red-400 font-bold text-lg">ALERTA CRÍTICO DETECTADO</h2>
+                        <p id="alertMessage" class="text-red-200">Falha no equipamento.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Grid de Dados Detalhados -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <!-- Identificação -->
+                <div class="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                    <h3 class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-3">Equipamento</h3>
+                    <div class="text-xl font-mono text-white mb-2" id="val-deviceId">--</div>
+                    <div class="flex justify-between text-sm border-t border-slate-700 pt-2 mt-2">
+                        <span class="text-slate-400">Modo:</span>
+                        <span class="font-bold text-blue-300" id="val-mode">--</span>
+                    </div>
+                    <div class="flex justify-between text-sm">
+                        <span class="text-slate-400">Status:</span>
+                        <span class="font-bold" id="val-power">--</span>
+                    </div>
+                </div>
+
+                <!-- Temperaturas -->
+                <div class="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                    <h3 class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-3">Térmico (°C)</h3>
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-sm text-slate-400">Ambiente (T1)</span>
+                        <span class="font-mono text-lg" id="val-tempReturn">--</span>
+                    </div>
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-sm text-slate-400">Serpentina (T2)</span>
+                        <span class="font-mono text-lg text-cyan-400" id="val-tempCoil">--</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-sm text-slate-400">Descarga Comp.</span>
+                        <span class="font-mono text-lg text-orange-400" id="val-tempDischarge">--</span>
+                    </div>
+                </div>
+
+                <!-- Pressões e Ciclo -->
+                <div class="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                    <h3 class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-3">Ciclo Frigorífico</h3>
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-sm text-slate-400">Baixa (Sucção)</span>
+                        <span class="font-mono text-lg text-blue-400" id="val-pressSuction">--</span>
+                    </div>
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-sm text-slate-400">Alta (Descarga)</span>
+                        <span class="font-mono text-lg text-red-400" id="val-pressDischarge">--</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-sm text-slate-400">Abertura EEV</span>
+                        <span class="font-mono text-lg" id="val-eev">--</span>
+                    </div>
+                </div>
+
+                <!-- Elétrica e Motores -->
+                <div class="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                    <h3 class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-3">Elétrica e Motores</h3>
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-sm text-slate-400">Corrente (A)</span>
+                        <span class="font-mono text-lg text-yellow-400" id="val-current">--</span>
+                    </div>
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-sm text-slate-400">Tensão (V)</span>
+                        <span class="font-mono text-lg" id="val-voltage">--</span>
+                    </div>
+                    <div class="flex justify-between items-center border-t border-slate-700 pt-2 mt-2">
+                        <span class="text-sm text-slate-400">Compressor</span>
+                        <span class="font-mono text-lg text-amber-300" id="val-hz">--</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Memória local da frota (Armazena as máquinas conforme o Broker envia os dados)
+        const fleetData = {};
+        
+        let currentMode = 'OVERVIEW'; // OVERVIEW ou DETAIL
+        let selectedDeviceId = null;
+
+        // Tópico curinga (+ no final) para ouvir TODAS as máquinas
+        const topicToSubscribe = "telemetry/hvac/+";
+        const clientId = "MonitorHTML_" + Math.random().toString(16).substr(2, 8);
+        
+        // Em navegadores, usamos 'ws://' (WebSocket) e indicamos a porta e o path
+        const brokerUrl = "ws://broker.hivemq.com:8000/mqtt";
+
+        // Conecta ao Broker usando MQTT.js
+        const mqttClient = mqtt.connect(brokerUrl, {
+            clientId: clientId,
+            clean: true,
+            connectTimeout: 5000,
+            reconnectPeriod: 5000, // Tenta reconectar sozinho
+        });
+
+        // Evento de conexão bem-sucedida
+        mqttClient.on('connect', () => {
+            console.log("Conectado ao Broker MQTT com sucesso!");
+            setConnectionStatus('ONLINE');
+            
+            // Assina o tópico
+            mqttClient.subscribe(topicToSubscribe, (err) => {
+                if (!err) console.log("Inscrito no tópico: " + topicToSubscribe);
+                else console.error("Erro ao assinar tópico:", err);
+            });
+        });
+
+        // Eventos de desconexão/erro
+        mqttClient.on('error', (err) => {
+            console.error("Erro MQTT:", err);
+            setConnectionStatus('OFFLINE');
+        });
+
+        mqttClient.on('offline', () => {
+            setConnectionStatus('OFFLINE');
+        });
+
+        // EVENTO PRINCIPAL: Disparado SEMPRE que a API C# posta um JSON na nuvem
+        mqttClient.on('message', (topic, message) => {
+            try {
+                // A biblioteca MQTT.js retorna a mensagem como Buffer, então passamos pra String primeiro
+                const payload = JSON.parse(message.toString());
+                const deviceId = payload.metadata.deviceId;
+                
+                // Salva na memória local do Dashboard
+                fleetData[deviceId] = payload;
+                
+                // Atualiza a interface
+                if (currentMode === 'OVERVIEW') {
+                    renderOverview();
+                } else if (currentMode === 'DETAIL' && selectedDeviceId === deviceId) {
+                    updateDetailDashboard(payload);
+                }
+            } catch (err) {
+                console.error("Erro ao ler JSON MQTT:", err);
+            }
+        });
+
+        function setConnectionStatus(status) {
+            const el = document.getElementById('connectionStatus');
+            if(status === 'ONLINE') {
+                el.innerHTML = `
+                    <span class="relative flex h-3 w-3">
+                      <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                      <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                    </span>
+                    Broker ONLINE
+                `;
+                el.className = "text-green-400 font-bold flex items-center gap-2 justify-end";
+            } else if(status === 'CONNECTING') {
+                el.innerHTML = `Conectando (WS)...`;
+                el.className = "text-amber-400 font-bold flex items-center gap-2 justify-end";
+            } else {
+                el.innerHTML = `🔴 Reconectando...`;
+                el.className = "text-red-500 font-bold flex items-center gap-2 justify-end";
+            }
+        }
+
+        // Renderiza a grade de Resumo usando a memória local
+        function renderOverview() {
+            const grid = document.getElementById('devicesGrid');
+            const devices = Object.values(fleetData);
+            
+            document.getElementById('totalDevicesCounter').innerText = `Total: ${devices.length}`;
+
+            if(devices.length === 0) return;
+            
+            // Remove a mensagem de 'Aguardando' se tiver aparelhos
+            const waitingMsg = document.getElementById('waitingMessage');
+            if(waitingMsg) waitingMsg.remove();
+
+            grid.innerHTML = ''; // Limpa e redesenha
+
+            devices.forEach(data => {
+                const hasError = data.diagnostics.errorCode !== "NONE" || data.diagnostics.protectionTripped;
+                const isPowerOn = data.operationalState.powerState;
+                
+                const cardBorder = hasError ? 'border-red-500 bg-red-900/20 alert-active' : (isPowerOn ? 'border-cyan-700 bg-slate-800' : 'border-slate-700 bg-slate-800/50 opacity-75');
+                const titleColor = hasError ? 'text-red-400' : 'text-white';
+                
+                const card = document.createElement('div');
+                card.className = `p-4 rounded-lg border shadow cursor-pointer transition-all hover:scale-[1.02] ${cardBorder}`;
+                card.onclick = () => openDetail(data.metadata.deviceId);
+                
+                card.innerHTML = `
+                    <div class="flex justify-between items-start mb-3 border-b ${hasError ? 'border-red-800' : 'border-slate-700'} pb-2">
+                        <h3 class="font-mono font-bold ${titleColor} text-lg truncate" title="${data.metadata.deviceId}">${data.metadata.deviceId}</h3>
+                        <span class="px-2 py-0.5 rounded text-xs font-bold ${isPowerOn ? 'bg-green-600/30 text-green-400' : 'bg-slate-700 text-slate-400'}">${isPowerOn ? 'ON' : 'OFF'}</span>
+                    </div>
+                    <div class="space-y-1 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-slate-400">Modo:</span>
+                            <span class="font-bold">${data.operationalState.operationMode}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-slate-400">Temp (Amb):</span>
+                            <span class="font-mono">${data.temperatures.indoorReturnAirC}°C</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-slate-400">Corrente:</span>
+                            <span class="font-mono text-yellow-400">${data.electrical.totalCurrentA} A</span>
+                        </div>
+                    </div>
+                    ${hasError ? `
+                    <div class="mt-3 bg-red-500/20 text-red-300 text-xs p-2 rounded flex gap-2">
+                        <span>⚠️</span> <span>Erro: ${data.diagnostics.errorCode}</span>
+                    </div>
+                    ` : ''}
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        // Navegação
+        function openDetail(deviceId) {
+            selectedDeviceId = deviceId;
+            currentMode = 'DETAIL';
+            
+            document.getElementById('overviewView').classList.add('hidden');
+            document.getElementById('detailView').classList.remove('hidden');
+            document.getElementById('headerSubtitle').innerText = `Detalhes: ${deviceId}`;
+            
+            if(fleetData[deviceId]) updateDetailDashboard(fleetData[deviceId]);
+        }
+
+        function backToOverview() {
+            selectedDeviceId = null;
+            currentMode = 'OVERVIEW';
+            
+            document.getElementById('detailView').classList.add('hidden');
+            document.getElementById('overviewView').classList.remove('hidden');
+            document.getElementById('headerSubtitle').innerText = "Visão Geral da Frota";
+            
+            renderOverview();
+        }
+
+        // Atualiza a tela de Detalhes
+        function updateDetailDashboard(data) {
+            document.getElementById('val-deviceId').innerText = data.metadata.deviceId;
+            document.getElementById('val-mode').innerText = data.operationalState.operationMode;
+            
+            const powerEl = document.getElementById('val-power');
+            powerEl.innerText = data.operationalState.powerState ? "LIGADO" : "DESLIGADO";
+            powerEl.className = data.operationalState.powerState ? "font-bold text-green-400" : "font-bold text-slate-500";
+
+            document.getElementById('val-tempReturn').innerText = data.temperatures.indoorReturnAirC + "°";
+            document.getElementById('val-tempCoil').innerText = data.temperatures.evaporatorCoilC + "°";
+            document.getElementById('val-tempDischarge').innerText = data.temperatures.compressorDischargeC + "°";
+
+            document.getElementById('val-pressSuction').innerText = data.refrigerationCycle.suctionPressurePsi + " PSI";
+            document.getElementById('val-pressDischarge').innerText = data.refrigerationCycle.dischargePressurePsi + " PSI";
+            document.getElementById('val-eev').innerText = data.refrigerationCycle.eevOpeningSteps + " p";
+
+            document.getElementById('val-current').innerText = data.electrical.totalCurrentA + " A";
+            document.getElementById('val-voltage').innerText = data.electrical.acInputVoltageV + " V";
+            document.getElementById('val-hz').innerText = data.actuators.compressorFrequencyHz + " Hz";
+
+            const alertPanel = document.getElementById('alertPanel');
+            if (data.diagnostics.errorCode !== "NONE" || data.diagnostics.protectionTripped) {
+                alertPanel.classList.remove('hidden');
+                document.getElementById('alertMessage').innerText = `Código: ${data.diagnostics.errorCode} - ${data.diagnostics.errorDescription}`;
+            } else {
+                alertPanel.classList.add('hidden');
+            }
+        }
+    </script>
+</body>
+</html>
