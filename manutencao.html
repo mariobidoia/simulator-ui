@@ -143,11 +143,11 @@
         let selectedDeviceId = null;
 
         // Tópico curinga (+ no final) para ouvir TODAS as máquinas
-        const topicToSubscribe = "telemetry/hvac/+";
+        const topicToSubscribe = "telemetria/venther/+";
         const clientId = "MonitorHTML_" + Math.random().toString(16).substr(2, 8);
         
         // Em navegadores, usamos 'ws://' (WebSocket) e indicamos a porta e o path
-        const brokerUrl = "ws://broker.hivemq.com:8000/mqtt";
+        const brokerUrl = "wss://broker.hivemq.com:8884/mqtt";
 
         // Conecta ao Broker usando MQTT.js
         const mqttClient = mqtt.connect(brokerUrl, {
